@@ -13,9 +13,16 @@ let browser;
 // 🔥 Reuse browser instance
 async function getBrowser() {
   if (!browser) {
+    const fs = require("fs");
+    const snapPath = "/snap/bin/chromium";
+    const executablePath =
+      process.platform === "linux" && fs.existsSync(snapPath)
+        ? snapPath
+        : undefined;
+
     browser = await puppeteer.launch({
       headless: true,
-      executablePath: "/snap/bin/chromium",
+      executablePath,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
