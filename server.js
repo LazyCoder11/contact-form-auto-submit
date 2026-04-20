@@ -30,45 +30,45 @@ async function getBrowser() {
 }
 
 // 🎯 ACTION HANDLERS
-const handlers = {
-  goto: async (page, action, ctx) => {
-    await page.goto(ctx.url, { waitUntil: "networkidle2", timeout: 30000 });
-  },
+// const handlers = {
+//   goto: async (page, action, ctx) => {
+//     await page.goto(ctx.url, { waitUntil: "networkidle2", timeout: 30000 });
+//   },
 
-  wait: async (page, action) => {
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-  },
+//   wait: async (page, action) => {
+//     await new Promise((resolve) => setTimeout(resolve, 1500));
+//   },
 
-  waitForSelector: async (page, action) => {
-    await page.waitForSelector(action.selector, { timeout: 10000 });
-  },
+//   waitForSelector: async (page, action) => {
+//     await page.waitForSelector(action.selector, { timeout: 10000 });
+//   },
 
-  click: async (page, action) => {
-    await page.click(action.selector);
-  },
+//   click: async (page, action) => {
+//     await page.click(action.selector);
+//   },
 
-  type: async (page, action) => {
-    await page.type(action.selector, action.text);
-  },
+//   type: async (page, action) => {
+//     await page.type(action.selector, action.text);
+//   },
 
-  evaluate: async (page, action) => {
-    return await page.evaluate(new Function(`return (${action.fn})`)());
-  },
+//   evaluate: async (page, action) => {
+//     return await page.evaluate(new Function(`return (${action.fn})`)());
+//   },
 
-  extractForms: async (page) => {
-    return await page.evaluate(() => {
-      return Array.from(document.querySelectorAll("form")).map((f) => ({
-        action: f.action,
-        method: f.method,
-        inputs: Array.from(f.querySelectorAll("input, textarea")).map((i) => ({
-          name: i.name,
-          type: i.type,
-          placeholder: i.placeholder,
-        })),
-      }));
-    });
-  },
-};
+//   extractForms: async (page) => {
+//     return await page.evaluate(() => {
+//       return Array.from(document.querySelectorAll("form")).map((f) => ({
+//         action: f.action,
+//         method: f.method,
+//         inputs: Array.from(f.querySelectorAll("input, textarea")).map((i) => ({
+//           name: i.name,
+//           type: i.type,
+//           placeholder: i.placeholder,
+//         })),
+//       }));
+//     });
+//   },
+// };
 
 app.post("/run", async (req, res) => {
   const { website, task } = req.body;

@@ -237,11 +237,21 @@ module.exports = async function contactFlow(page, ctx) {
 
   await new Promise((r) => setTimeout(r, 3000));
 
-  // ─────────────────────────────
-  // RETURN RESULT
-  // ─────────────────────────────
+  // Check success indicators
+  const success = await page.evaluate(() => {
+    const text = document.body.innerText.toLowerCase();
+
+    return (
+      text.includes("thank you") ||
+      text.includes("successfully") ||
+      text.includes("we received") ||
+      text.includes("message sent") ||
+      text.includes("submitted successfully")
+    );
+  });
+
   return {
-    formStatus: "SUBMITTED",
+    formStatus: success ? "SUCCESS" : "SUBMIT_FAILED",
     contactPageUrl,
     finalUrl: page.url(),
   };
