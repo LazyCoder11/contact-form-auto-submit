@@ -443,6 +443,11 @@ function safeJsonParse(text, fallback = {}) {
   }
 }
 
+function normalizeModelName(model) {
+  if (!model) return "llama-3.3-70b-versatile";
+  return model.toLowerCase().replace(/\s+/g, "-");
+}
+
 async function getAIFieldMapping({ fields, senderDetails, apiKey, model }) {
   if (!apiKey || !fields?.length) return {};
 
@@ -887,7 +892,7 @@ module.exports = async function contactFlow(page, ctx) {
         fields: unresolvedFields,
         senderDetails: data,
         apiKey: groqApiKey,
-        model: groqModel,
+        model: normalizeModelName(groqModel),
       });
       aiUsed = true;
     } catch (error) {
@@ -962,7 +967,10 @@ module.exports = async function contactFlow(page, ctx) {
       text.includes("message sent") ||
       text.includes("we received") ||
       text.includes("thanks for contacting") ||
-      text.includes("your message has been sent");
+      text.includes("your message has been sent") ||
+      text.includes("appreciate your interest") ||
+      text.includes("look forward to connecting") ||
+      text.includes("we will get back to you");
 
     const errorText =
       text.includes("error") ||
