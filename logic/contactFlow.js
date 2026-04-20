@@ -897,6 +897,11 @@ module.exports = async function contactFlow(page, ctx) {
 
   if (!fields.length) {
     console.log("No form on main page, scanning iframes...");
+    // Scroll to bottom to trigger lazy-loaded iframes
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await sleep(2000);
+    await page.evaluate(() => window.scrollTo(0, 0));
+
     const frames = page.frames();
     for (const frame of frames) {
       const frameFields = await extractFields(frame);
