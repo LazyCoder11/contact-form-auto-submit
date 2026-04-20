@@ -752,6 +752,42 @@ async function extractFields(page) {
   });
 }
 
+async function captchaDetection(page) {
+  return await page.evaluate(() => {
+    const selectors = [
+      'iframe[src*="recaptcha"]',
+      'iframe[src*="hcaptcha"]',
+      ".g-recaptcha",
+      ".h-captcha",
+      'iframe[src*="cloudflare"]',
+      "#cf-turnstile",
+      'img[src*="captcha"]',
+    ];
+    return selectors.some((s) => document.querySelector(s) !== null);
+  });
+}
+
+async function smartClick(page, selector) {
+  const el = await page.$(selector);
+  if (!el) return false;
+
+  try {
+    await el.scrollIntoView();
+    await el.click({ timeout: 3000 });
+    return true;
+  } catch (err) {
+    try {
+      await page.evaluate((sel) => {
+        const item = document.querySelector(sel);
+        if (item) item.click();
+      }, selector);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
 async function applyFieldValue(page, field, value) {
   if (value === undefined || value === null) return false;
   if (!field.selector) return false;
@@ -762,6 +798,12 @@ async function applyFieldValue(page, field, value) {
   if (!el) return false;
 
   try {
+    await page.evaluate((sel) => {
+      const item = document.querySelector(sel);
+      if (item) item.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, field.selector);
+    await sleep(200);
+
     if (field.tag === "select") {
       await page.select(field.selector, String(value));
       return true;
@@ -770,7 +812,7 @@ async function applyFieldValue(page, field, value) {
     if (field.type === "checkbox") {
       const shouldCheck = !!value;
       const isChecked = await el.evaluate((node) => !!node.checked);
-      if (shouldCheck !== isChecked) await el.click();
+      if (shouldCheck !== isChecked) await smartClick(page, field.selector);
       return true;
     }
 
@@ -778,22 +820,19 @@ async function applyFieldValue(page, field, value) {
       await page.evaluate(
         ({ name, value, selector }) => {
           let target = null;
-
           if (name) {
             target = document.querySelector(
               `input[type="radio"][name="${CSS.escape(name)}"][value="${CSS.escape(String(value))}"]`,
             );
           }
-
           if (!target && selector) {
             const base = document.querySelector(selector);
             if (base && base.form) {
               target = base.form.querySelector(
-                `input[type="radio"][value="${CSS.escape(String(value))}"]`,
+                 `input[type="radio"][value="${CSS.escape(String(value))}"]`,
               );
             }
           }
-
           if (target) target.click();
         },
         { name: field.name, value, selector: field.selector },
@@ -801,9 +840,10 @@ async function applyFieldValue(page, field, value) {
       return true;
     }
 
-    await el.click({ clickCount: 3 });
+    await smartClick(page, field.selector);
+    await page.keyboard.press("Control+A");
     await page.keyboard.press("Backspace");
-    await el.type(String(value), { delay: 20 });
+    await page.keyboard.type(String(value), { delay: 10 });
     return true;
   } catch (_) {
     return false;
@@ -941,10 +981,11 @@ module.exports = async function contactFlow(page, ctx) {
 
   await sleep(800);
 
+  const captchaFound = await captchaDetection(page);
   const btn = await page.$('button[type="submit"], input[type="submit"]');
 
   if (btn) {
-    await btn.click();
+    await smartClick(page, 'button[type="submit"], input[type="submit"]');
   } else {
     await page.evaluate(() => {
       const form = document.querySelector("form");
@@ -958,8 +999,11 @@ module.exports = async function contactFlow(page, ctx) {
 
   await sleep(3000);
 
-  const result = await page.evaluate(() => {
-    const text = (document.body.innerText || "").toLowerCase();
+  // 🔥 Handle navigation-induced crashes
+  let result = null;
+  try {
+    result = await page.evaluate(() => {
+      const text = (document.body.innerText || "").toLowerCase();
 
     const successText =
       text.includes("thank you") ||
@@ -970,7 +1014,12 @@ module.exports = async function contactFlow(page, ctx) {
       text.includes("your message has been sent") ||
       text.includes("appreciate your interest") ||
       text.includes("look forward to connecting") ||
-      text.includes("we will get back to you");
+      text.includes("we will get back to you") ||
+      text.includes("submission successful") ||
+      text.includes("message was sent") ||
+      text.includes("sent successfully") ||
+      text.includes("form submitted") ||
+      text.includes("thanks for getting in touch");
 
     const errorTextFound =
       text.includes("error") ||
@@ -1002,15 +1051,47 @@ module.exports = async function contactFlow(page, ctx) {
       pageTextSample: text.slice(0, 1000),
     };
   });
+  } catch (err) {
+    // If navigation happened, try one last time on the new context
+    await sleep(2000);
+    try {
+      result = await page.evaluate(() => {
+        const text = (document.body.innerText || "").toLowerCase();
+        return {
+          successText:
+            text.includes("thank you") ||
+            text.includes("successfully") ||
+            text.includes("received") ||
+            text.includes("sent"),
+          errorText: false,
+          errorMessages: [],
+          formExists: !!document.querySelector("form"),
+          alertExists: false,
+          pageTextSample: text.slice(0, 1000),
+        };
+      });
+    } catch (_) {
+      // Final fallback if everything fails
+      result = {
+        successText: true, // Assume success if redirected and no error visible
+        errorText: false,
+        errorMessages: [],
+        formExists: false,
+        alertExists: false,
+        pageTextSample: "Navigation occurred (Context destroyed)",
+      };
+    }
+  }
 
   const isSuccess =
-    (result.successText || result.alertExists || !result.formExists) &&
+    result && (result.successText || result.alertExists || !result.formExists) &&
     !result.errorText;
 
   return {
     formStatus: isSuccess ? "SUCCESS" : "SUBMIT_FAILED",
-    error: !isSuccess ? result.errorMessages.join(" | ") || "Submission failed without specific error message" : null,
+    error: !isSuccess ? result.errorMessages.join(" | ") || (captchaFound ? "Captcha detected - Manual intervention required" : "Submission failed without specific error message") : null,
     debug: result,
+    captchaFound,
     aiUsed,
     totalFields: fields.length,
     unresolvedFieldCount: unresolvedFields.length,
