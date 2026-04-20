@@ -82,7 +82,7 @@ app.post("/run", async (req, res) => {
     let result;
 
     if (task === "contactFlow") {
-      result = await contactFlow(page, req.body);
+      result = await contactFlow(page, req.body.data);
     }
 
     await page.close();
