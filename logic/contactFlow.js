@@ -646,8 +646,106 @@ function validateAIValue(field, value) {
   return String(value);
 }
 
-async function extractFields(page) {
-  return await page.evaluate(() => {
+async function captchaDetection(context) {
+  return await context.evaluate(() => {
+    const selectors = [
+      'iframe[src*="recaptcha"]',
+      'iframe[src*="hcaptcha"]',
+      ".g-recaptcha",
+      ".h-captcha",
+      'iframe[src*="cloudflare"]',
+      "#cf-turnstile",
+      'img[src*="captcha"]',
+    ];
+    return selectors.some((s) => document.querySelector(s) !== null);
+  });
+}
+
+async function smartClick(context, selector) {
+  const el = await context.$(selector);
+  if (!el) return false;
+
+  try {
+    await el.scrollIntoView();
+    await el.click({ timeout: 3000 });
+    return true;
+  } catch (err) {
+    try {
+      await context.evaluate((sel) => {
+        const item = document.querySelector(sel);
+        if (item) item.click();
+      }, selector);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
+async function applyFieldValue(context, field, value) {
+  if (value === undefined || value === null) return false;
+  if (!field.selector) return false;
+
+  if (field.type === "hidden") return true;
+
+  const el = await context.$(field.selector);
+  if (!el) return false;
+
+  try {
+    await context.evaluate((sel) => {
+      const item = document.querySelector(sel);
+      if (item) item.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, field.selector);
+    await sleep(200);
+
+    if (field.tag === "select") {
+      await context.select(field.selector, String(value));
+      return true;
+    }
+
+    if (field.type === "checkbox") {
+      const shouldCheck = !!value;
+      const isChecked = await el.evaluate((node) => !!node.checked);
+      if (shouldCheck !== isChecked) await smartClick(context, field.selector);
+      return true;
+    }
+
+    if (field.type === "radio") {
+      await context.evaluate(
+        ({ name, value, selector }) => {
+          let target = null;
+          if (name) {
+            target = document.querySelector(
+              `input[type="radio"][name="${CSS.escape(name)}"][value="${CSS.escape(String(value))}"]`,
+            );
+          }
+          if (!target && selector) {
+            const base = document.querySelector(selector);
+            if (base && base.form) {
+              target = base.form.querySelector(
+                 `input[type="radio"][value="${CSS.escape(String(value))}"]`,
+              );
+            }
+          }
+          if (target) target.click();
+        },
+        { name: field.name, value, selector: field.selector },
+      );
+      return true;
+    }
+
+    await smartClick(context, field.selector);
+    await context.page().keyboard.press("Control+A");
+    await context.page().keyboard.press("Backspace");
+    await context.page().keyboard.type(String(value), { delay: 10 });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function extractFields(context) {
+  return await context.evaluate(() => {
     const visible = (el) => {
       const style = window.getComputedStyle(el);
       return (
@@ -752,104 +850,6 @@ async function extractFields(page) {
   });
 }
 
-async function captchaDetection(page) {
-  return await page.evaluate(() => {
-    const selectors = [
-      'iframe[src*="recaptcha"]',
-      'iframe[src*="hcaptcha"]',
-      ".g-recaptcha",
-      ".h-captcha",
-      'iframe[src*="cloudflare"]',
-      "#cf-turnstile",
-      'img[src*="captcha"]',
-    ];
-    return selectors.some((s) => document.querySelector(s) !== null);
-  });
-}
-
-async function smartClick(page, selector) {
-  const el = await page.$(selector);
-  if (!el) return false;
-
-  try {
-    await el.scrollIntoView();
-    await el.click({ timeout: 3000 });
-    return true;
-  } catch (err) {
-    try {
-      await page.evaluate((sel) => {
-        const item = document.querySelector(sel);
-        if (item) item.click();
-      }, selector);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-}
-
-async function applyFieldValue(page, field, value) {
-  if (value === undefined || value === null) return false;
-  if (!field.selector) return false;
-
-  if (field.type === "hidden") return true;
-
-  const el = await page.$(field.selector);
-  if (!el) return false;
-
-  try {
-    await page.evaluate((sel) => {
-      const item = document.querySelector(sel);
-      if (item) item.scrollIntoView({ behavior: "smooth", block: "center" });
-    }, field.selector);
-    await sleep(200);
-
-    if (field.tag === "select") {
-      await page.select(field.selector, String(value));
-      return true;
-    }
-
-    if (field.type === "checkbox") {
-      const shouldCheck = !!value;
-      const isChecked = await el.evaluate((node) => !!node.checked);
-      if (shouldCheck !== isChecked) await smartClick(page, field.selector);
-      return true;
-    }
-
-    if (field.type === "radio") {
-      await page.evaluate(
-        ({ name, value, selector }) => {
-          let target = null;
-          if (name) {
-            target = document.querySelector(
-              `input[type="radio"][name="${CSS.escape(name)}"][value="${CSS.escape(String(value))}"]`,
-            );
-          }
-          if (!target && selector) {
-            const base = document.querySelector(selector);
-            if (base && base.form) {
-              target = base.form.querySelector(
-                 `input[type="radio"][value="${CSS.escape(String(value))}"]`,
-              );
-            }
-          }
-          if (target) target.click();
-        },
-        { name: field.name, value, selector: field.selector },
-      );
-      return true;
-    }
-
-    await smartClick(page, field.selector);
-    await page.keyboard.press("Control+A");
-    await page.keyboard.press("Backspace");
-    await page.keyboard.type(String(value), { delay: 10 });
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-
 module.exports = async function contactFlow(page, ctx) {
   const {
     website,
@@ -879,16 +879,35 @@ module.exports = async function contactFlow(page, ctx) {
     return match?.href || null;
   });
 
-  if (contactLink) {
-    await page.goto(contactLink, {
-      waitUntil: "networkidle2",
-      timeout: 30000,
-    });
-    await sleep(1500);
+  if (contactLink && contactLink !== page.url()) {
+    try {
+      await page.goto(contactLink, {
+        waitUntil: "networkidle2",
+        timeout: 15000,
+      });
+      await sleep(1500);
+    } catch (e) {
+      console.log("Navigation to contact link failed, staying on current page.");
+    }
   }
 
   const contactPageUrl = page.url();
-  const fields = await extractFields(page);
+  let fields = await extractFields(page);
+  let activeContext = page;
+
+  if (!fields.length) {
+    console.log("No form on main page, scanning iframes...");
+    const frames = page.frames();
+    for (const frame of frames) {
+      const frameFields = await extractFields(frame);
+      if (frameFields.length > 0) {
+        fields = frameFields;
+        activeContext = frame;
+        console.log(`Found form in frame: ${frame.url()}`);
+        break;
+      }
+    }
+  }
 
   if (!fields.length) {
     return {
@@ -976,18 +995,18 @@ module.exports = async function contactFlow(page, ctx) {
       seenRadioGroups.add(groupKey);
     }
 
-    await applyFieldValue(page, field, fillMap[field.key]);
+    await applyFieldValue(activeContext, field, fillMap[field.key]);
   }
 
   await sleep(800);
 
-  const captchaFound = await captchaDetection(page);
-  const btn = await page.$('button[type="submit"], input[type="submit"]');
+  const captchaFound = await captchaDetection(activeContext);
+  const btn = await activeContext.$('button[type="submit"], input[type="submit"]');
 
   if (btn) {
-    await smartClick(page, 'button[type="submit"], input[type="submit"]');
+    await smartClick(activeContext, 'button[type="submit"], input[type="submit"]');
   } else {
-    await page.evaluate(() => {
+    await activeContext.evaluate(() => {
       const form = document.querySelector("form");
       if (form) {
         const event = new Event("submit", { bubbles: true, cancelable: true });
@@ -1002,7 +1021,7 @@ module.exports = async function contactFlow(page, ctx) {
   // 🔥 Handle navigation-induced crashes
   let result = null;
   try {
-    result = await page.evaluate(() => {
+    result = await activeContext.evaluate(() => {
       const text = (document.body.innerText || "").toLowerCase();
 
     const successText =
@@ -1055,7 +1074,7 @@ module.exports = async function contactFlow(page, ctx) {
     // If navigation happened, try one last time on the new context
     await sleep(2000);
     try {
-      result = await page.evaluate(() => {
+      result = await activeContext.evaluate(() => {
         const text = (document.body.innerText || "").toLowerCase();
         return {
           successText:
