@@ -381,26 +381,39 @@ module.exports = async function contactFlow(page, ctx) {
 
   await new Promise((r) => setTimeout(r, 3000));
 
-  // ─────────────────────────────
-  // SUCCESS DETECTION 🔥
-  // ─────────────────────────────
-  const success = await page.evaluate(() => {
+  // 🔥 MULTI-LAYER SUCCESS DETECTION
+  const result = await page.evaluate(() => {
     const text = document.body.innerText.toLowerCase();
 
-    return (
+    const successText =
       text.includes("thank you") ||
       text.includes("successfully") ||
-      text.includes("we received") ||
       text.includes("message sent") ||
-      text.includes("submitted successfully")
-    );
+      text.includes("we received");
+
+    // Check if form disappeared
+    const formExists = !!document.querySelector("form");
+
+    // Check success alert / popup
+    const alertExists =
+      document.querySelector(
+        ".success, .alert-success, .wpcf7-mail-sent-ok",
+      ) !== null;
+
+    return {
+      successText,
+      formExists,
+      alertExists,
+    };
   });
 
-  // DEBUG screenshot
-  await page.screenshot({ path: "after-submit.png" });
+  // 🔥 FINAL DECISION
+  const isSuccess =
+    result.successText || result.alertExists || !result.formExists;
 
   return {
-    formStatus: success ? "SUCCESS" : "SUBMIT_FAILED",
+    formStatus: isSuccess ? "SUCCESS" : "SUBMIT_FAILED",
+    debug: result,
     contactPageUrl,
     finalUrl: page.url(),
   };
