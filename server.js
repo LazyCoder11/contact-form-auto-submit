@@ -23,6 +23,7 @@ async function getBrowser() {
     browser = await puppeteer.launch({
       headless: true,
       executablePath,
+      ignoreHTTPSErrors: true,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
