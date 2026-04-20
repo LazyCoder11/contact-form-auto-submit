@@ -972,12 +972,20 @@ module.exports = async function contactFlow(page, ctx) {
       text.includes("look forward to connecting") ||
       text.includes("we will get back to you");
 
-    const errorText =
+    const errorTextFound =
       text.includes("error") ||
       text.includes("required field") ||
       text.includes("invalid email") ||
       text.includes("please fill") ||
       text.includes("captcha");
+
+    const errorMessages = Array.from(
+      document.querySelectorAll(
+        ".error, .alert-danger, .wpcf7-not-valid-tip, .message-error, .form-error, .invalid-feedback, [aria-invalid='true']",
+      ),
+    )
+      .map((el) => el.innerText.trim())
+      .filter((t) => t.length > 5 && t.length < 500);
 
     const formExists = !!document.querySelector("form");
     const alertExists =
@@ -987,7 +995,8 @@ module.exports = async function contactFlow(page, ctx) {
 
     return {
       successText,
-      errorText,
+      errorText: errorTextFound || errorMessages.length > 0,
+      errorMessages,
       formExists,
       alertExists,
       pageTextSample: text.slice(0, 1000),
@@ -1000,6 +1009,7 @@ module.exports = async function contactFlow(page, ctx) {
 
   return {
     formStatus: isSuccess ? "SUCCESS" : "SUBMIT_FAILED",
+    error: !isSuccess ? result.errorMessages.join(" | ") || "Submission failed without specific error message" : null,
     debug: result,
     aiUsed,
     totalFields: fields.length,
