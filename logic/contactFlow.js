@@ -259,161 +259,743 @@
 //   };
 // };
 
+// module.exports = async function contactFlow(page, ctx) {
+//   const { website, ...data } = ctx;
+
+//   await page.goto(website, { waitUntil: "networkidle2", timeout: 30000 });
+//   await new Promise((r) => setTimeout(r, 1500));
+
+//   // ─────────────────────────────
+//   // FIND CONTACT PAGE
+//   // ─────────────────────────────
+//   const contactLink = await page.evaluate(() => {
+//     return Array.from(document.querySelectorAll("a")).find((a) =>
+//       (a.href + a.innerText).toLowerCase().includes("contact"),
+//     )?.href;
+//   });
+
+//   if (contactLink) {
+//     await page.goto(contactLink, { waitUntil: "networkidle2" });
+//     await new Promise((r) => setTimeout(r, 1500));
+//   }
+
+//   const contactPageUrl = page.url();
+
+//   // ─────────────────────────────
+//   // GET ALL FORM ELEMENTS
+//   // ─────────────────────────────
+//   const elements = await page.$$("input:not([type=hidden]), textarea, select");
+
+//   if (!elements.length) {
+//     return { formStatus: "NO_FORM", contactPageUrl };
+//   }
+
+//   // ─────────────────────────────
+//   // SMART FIELD MATCHING ENGINE 🔥
+//   // ─────────────────────────────
+//   for (const el of elements) {
+//     try {
+//       const meta = await el.evaluate((e) => {
+//         const label = e.id
+//           ? document.querySelector(`label[for="${e.id}"]`)?.innerText || ""
+//           : "";
+
+//         return {
+//           tag: e.tagName.toLowerCase(),
+//           type: (e.type || "").toLowerCase(),
+//           name: (e.name || "").toLowerCase(),
+//           placeholder: (e.placeholder || "").toLowerCase(),
+//           label: label.toLowerCase(),
+//           required: e.required || e.getAttribute("aria-required") === "true",
+//           options:
+//             e.tagName === "SELECT"
+//               ? Array.from(e.options).map((o) => o.value)
+//               : [],
+//         };
+//       });
+
+//       const text = `${meta.name} ${meta.placeholder} ${meta.label}`;
+
+//       let valueToFill = null;
+
+//       // 🔥 Dynamic matching from ALL data
+//       for (const key in data) {
+//         if (!data[key]) continue;
+
+//         const keyLower = key.toLowerCase();
+
+//         if (text.includes(keyLower)) {
+//           valueToFill = data[key];
+//           break;
+//         }
+//       }
+
+//       // 🔥 Fallback intelligent mapping
+//       if (!valueToFill) {
+//         if (text.includes("email")) valueToFill = data.senderEmail;
+//         else if (text.includes("name")) valueToFill = data.senderName;
+//         else if (text.includes("phone") || text.includes("tel"))
+//           valueToFill = data.senderPhone;
+//         else if (text.includes("message") || meta.tag === "textarea")
+//           valueToFill = data.message;
+//       }
+
+//       // 🔥 Fill input/textarea
+//       if (valueToFill && meta.tag !== "select") {
+//         await el.click({ clickCount: 3 });
+//         await el.type(String(valueToFill), { delay: 20 });
+//       }
+
+//       // 🔥 Handle SELECT
+//       else if (meta.tag === "select" && meta.options.length) {
+//         await page.select(
+//           await el.evaluate((e) => e.name),
+//           meta.options.find((o) => o) || meta.options[0],
+//         );
+//       }
+
+//       // 🔥 Required fallback
+//       else if (meta.required) {
+//         await el.click({ clickCount: 3 });
+//         await el.type("Test", { delay: 20 });
+//       }
+//     } catch (err) {
+//       console.log("⚠️ Skipped field");
+//     }
+//   }
+
+//   await new Promise((r) => setTimeout(r, 800));
+
+//   // ─────────────────────────────
+//   // SUBMIT FORM
+//   // ─────────────────────────────
+//   const btn = await page.$('button[type="submit"], input[type="submit"]');
+
+//   if (btn) {
+//     await btn.click();
+//   } else {
+//     await page.evaluate(() => {
+//       document.querySelector("form")?.submit();
+//     });
+//   }
+
+//   await new Promise((r) => setTimeout(r, 3000));
+
+//   // 🔥 MULTI-LAYER SUCCESS DETECTION
+//   const result = await page.evaluate(() => {
+//     const text = document.body.innerText.toLowerCase();
+
+//     const successText =
+//       text.includes("thank you") ||
+//       text.includes("successfully") ||
+//       text.includes("message sent") ||
+//       text.includes("we received");
+
+//     // Check if form disappeared
+//     const formExists = !!document.querySelector("form");
+
+//     // Check success alert / popup
+//     const alertExists =
+//       document.querySelector(
+//         ".success, .alert-success, .wpcf7-mail-sent-ok",
+//       ) !== null;
+
+//     return {
+//       successText,
+//       formExists,
+//       alertExists,
+//     };
+//   });
+
+//   // 🔥 FINAL DECISION
+//   const isSuccess =
+//     result.successText || result.alertExists || !result.formExists;
+
+//   return {
+//     formStatus: isSuccess ? "SUCCESS" : "SUBMIT_FAILED",
+//     debug: result,
+//     contactPageUrl,
+//     finalUrl: page.url(),
+//   };
+// };
+
+const axios = require("axios");
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function safeJsonParse(text, fallback = {}) {
+  if (!text || typeof text !== "string") return fallback;
+
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch (_) {
+        return fallback;
+      }
+    }
+    return fallback;
+  }
+}
+
+async function getAIFieldMapping({ fields, senderDetails, apiKey, model }) {
+  if (!apiKey || !fields?.length) return {};
+
+  const systemPrompt = `You are a contact form filler assistant. Given a list of form fields and sender details, you return a JSON object mapping each field key to the value that should be filled in.
+
+Rules:
+1. Match fields by name, id, placeholder, and label text.
+2. For name fields: use senderName.
+3. For email fields: use senderEmail.
+4. For phone/tel fields: use senderPhone.
+5. For message/comment/body/enquiry textarea: use the message.
+6. For subject fields: generate a short relevant subject.
+7. For company/organization fields: use businessName.
+8. For hidden/CSRF fields: keep their existing value exactly.
+9. For honeypot fields (isHoneypot=true): return empty string.
+10. For select/dropdown: choose the most appropriate option value from the provided option values only.
+11. For checkbox fields, return true or false.
+12. For radio fields, return the best matching option value from the provided option values only.
+13. Return ONLY a raw JSON object with NO markdown, NO explanation.`;
+
+  const response = await axios.post(
+    "https://api.groq.com/openai/v1/chat/completions",
+    {
+      model: model || "llama-3.3-70b-versatile",
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content: JSON.stringify({
+            fields,
+            senderDetails,
+          }),
+        },
+      ],
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 30000,
+    },
+  );
+
+  const content = response?.data?.choices?.[0]?.message?.content?.trim() || "{}";
+  return safeJsonParse(content, {});
+}
+
+function normalizeText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildHeuristicValue(field, data) {
+  const text = normalizeText(
+    [
+      field.name,
+      field.id,
+      field.placeholder,
+      field.label,
+      field.ariaLabel,
+      field.type,
+    ].join(" "),
+  );
+
+  if (field.isHoneypot) return "";
+  if (field.isHidden) return field.existingValue || "";
+
+  if (field.tag === "select") {
+    const options = field.options || [];
+    const optionValues = options.map((o) => normalizeText(o.value));
+    const optionTexts = options.map((o) => normalizeText(o.text));
+
+    if (text.includes("country")) {
+      const idx =
+        optionValues.findIndex((v) => v === "in" || v === "india") >= 0
+          ? optionValues.findIndex((v) => v === "in" || v === "india")
+          : optionTexts.findIndex((t) => t.includes("india"));
+      if (idx >= 0) return options[idx].value;
+    }
+
+    if (text.includes("department") || text.includes("reason") || text.includes("inquiry")) {
+      const preferred = ["sales", "support", "general", "enquiry", "inquiry"];
+      for (const p of preferred) {
+        const idx =
+          optionValues.findIndex((v) => v.includes(p)) >= 0
+            ? optionValues.findIndex((v) => v.includes(p))
+            : optionTexts.findIndex((t) => t.includes(p));
+        if (idx >= 0) return options[idx].value;
+      }
+    }
+
+    const validOptions = options.filter(
+      (o) => String(o.value || "").trim() !== "" && !/select|choose|please/i.test(String(o.text || "")),
+    );
+    return validOptions[0]?.value ?? options[0]?.value ?? null;
+  }
+
+  if (field.type === "checkbox") {
+    if (text.includes("terms") || text.includes("agree") || text.includes("consent") || text.includes("privacy")) {
+      return true;
+    }
+    return field.required ? true : null;
+  }
+
+  if (field.type === "radio") {
+    const options = field.options || [];
+    const joined = options.map((o) => normalizeText(`${o.value} ${o.text}`));
+
+    if (text.includes("email")) {
+      const idx = joined.findIndex((x) => x.includes("email"));
+      if (idx >= 0) return options[idx].value;
+    }
+
+    if (text.includes("phone")) {
+      const idx = joined.findIndex((x) => x.includes("phone"));
+      if (idx >= 0) return options[idx].value;
+    }
+
+    return options[0]?.value ?? null;
+  }
+
+  for (const key of Object.keys(data || {})) {
+    const val = data[key];
+    if (!val) continue;
+    if (text.includes(normalizeText(key))) return val;
+  }
+
+  if (text.includes("full name") || text.includes("your name") || text.includes("name")) {
+    return data.senderName || null;
+  }
+
+  if (text.includes("email")) {
+    return data.senderEmail || null;
+  }
+
+  if (text.includes("phone") || text.includes("tel") || text.includes("mobile") || text.includes("whatsapp")) {
+    return data.senderPhone || null;
+  }
+
+  if (text.includes("company") || text.includes("organisation") || text.includes("organization") || text.includes("business")) {
+    return data.businessName || null;
+  }
+
+  if (text.includes("subject")) {
+    return data.subject || "Business Inquiry";
+  }
+
+  if (
+    text.includes("message") ||
+    text.includes("comment") ||
+    text.includes("details") ||
+    text.includes("description") ||
+    text.includes("enquiry") ||
+    field.tag === "textarea"
+  ) {
+    return data.message || null;
+  }
+
+  if (field.type === "url" && data.websiteUrl) {
+    return data.websiteUrl;
+  }
+
+  return null;
+}
+
+function validateAIValue(field, value) {
+  if (value === undefined || value === null) return null;
+
+  if (field.isHoneypot) return "";
+  if (field.isHidden) return field.existingValue || "";
+
+  if (field.tag === "select") {
+    const options = field.options || [];
+    const allowed = new Set(options.map((o) => String(o.value)));
+    return allowed.has(String(value)) ? String(value) : null;
+  }
+
+  if (field.type === "radio") {
+    const options = field.options || [];
+    const allowed = new Set(options.map((o) => String(o.value)));
+    return allowed.has(String(value)) ? String(value) : null;
+  }
+
+  if (field.type === "checkbox") {
+    if (typeof value === "boolean") return value;
+    if (["true", "1", "yes", "on"].includes(normalizeText(value))) return true;
+    if (["false", "0", "no", "off"].includes(normalizeText(value))) return false;
+    return null;
+  }
+
+  return String(value);
+}
+
+async function extractFields(page) {
+  return await page.evaluate(() => {
+    const visible = (el) => {
+      const style = window.getComputedStyle(el);
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        parseFloat(style.opacity || "1") > 0
+      );
+    };
+
+    const getLabel = (el) => {
+      if (el.id) {
+        const lbl = document.querySelector(`label[for="${el.id}"]`);
+        if (lbl) return lbl.innerText.trim();
+      }
+
+      const wrappingLabel = el.closest("label");
+      if (wrappingLabel) return wrappingLabel.innerText.trim();
+
+      const ariaLabelledBy = el.getAttribute("aria-labelledby");
+      if (ariaLabelledBy) {
+        const texts = ariaLabelledBy
+          .split(/\s+/)
+          .map((id) => document.getElementById(id)?.innerText?.trim() || "")
+          .filter(Boolean);
+        if (texts.length) return texts.join(" ");
+      }
+
+      return "";
+    };
+
+    const getSelector = (el, index) => {
+      if (el.name) return `[name="${CSS.escape(el.name)}"]`;
+      if (el.id) return `#${CSS.escape(el.id)}`;
+      return `[data-ai-contact-field="${index}"]`;
+    };
+
+    const nodes = Array.from(
+      document.querySelectorAll("input, textarea, select")
+    );
+
+    return nodes.map((e, index) => {
+      if (!e.name && !e.id) {
+        e.setAttribute("data-ai-contact-field", String(index));
+      }
+
+      const tag = e.tagName.toLowerCase();
+      const type = (e.type || "").toLowerCase();
+      const name = e.name || "";
+      const id = e.id || "";
+      const placeholder = e.placeholder || "";
+      const label = getLabel(e);
+      const ariaLabel = e.getAttribute("aria-label") || "";
+      const required = e.required || e.getAttribute("aria-required") === "true";
+      const hiddenByType = type === "hidden";
+      const hiddenByUi = !visible(e);
+      const isHidden = hiddenByType || hiddenByUi;
+
+      const haystack = `${name} ${id} ${placeholder} ${label} ${ariaLabel}`.toLowerCase();
+
+      const isHoneypot =
+        !required &&
+        /website|url|homepage|fax|nickname|middle.?name|leave.?blank|do.?not.?fill/i.test(haystack);
+
+      let options = [];
+      if (tag === "select") {
+        options = Array.from(e.options).map((o) => ({
+          text: o.text || "",
+          value: o.value || "",
+          selected: o.selected,
+        }));
+      }
+
+      if (type === "radio") {
+        const radioGroup = name
+          ? Array.from(document.querySelectorAll(`input[type="radio"][name="${CSS.escape(name)}"]`))
+          : [e];
+        options = radioGroup.map((r) => ({
+          text: getLabel(r) || r.value || "",
+          value: r.value || "",
+          checked: r.checked,
+        }));
+      }
+
+      return {
+        key: name || id || `field_${index}`,
+        selector: getSelector(e, index),
+        tag,
+        type,
+        name,
+        id,
+        placeholder,
+        label,
+        ariaLabel,
+        required,
+        isHidden,
+        isHoneypot,
+        existingValue: e.value || "",
+        checked: !!e.checked,
+        options,
+      };
+    });
+  });
+}
+
+async function applyFieldValue(page, field, value) {
+  if (value === undefined || value === null) return false;
+  if (!field.selector) return false;
+
+  if (field.type === "hidden") return true;
+
+  const el = await page.$(field.selector);
+  if (!el) return false;
+
+  try {
+    if (field.tag === "select") {
+      await page.select(field.selector, String(value));
+      return true;
+    }
+
+    if (field.type === "checkbox") {
+      const shouldCheck = !!value;
+      const isChecked = await el.evaluate((node) => !!node.checked);
+      if (shouldCheck !== isChecked) await el.click();
+      return true;
+    }
+
+    if (field.type === "radio") {
+      await page.evaluate(
+        ({ name, value, selector }) => {
+          let target = null;
+
+          if (name) {
+            target = document.querySelector(
+              `input[type="radio"][name="${CSS.escape(name)}"][value="${CSS.escape(String(value))}"]`,
+            );
+          }
+
+          if (!target && selector) {
+            const base = document.querySelector(selector);
+            if (base && base.form) {
+              target = base.form.querySelector(
+                `input[type="radio"][value="${CSS.escape(String(value))}"]`,
+              );
+            }
+          }
+
+          if (target) target.click();
+        },
+        { name: field.name, value, selector: field.selector },
+      );
+      return true;
+    }
+
+    await el.click({ clickCount: 3 });
+    await page.keyboard.press("Backspace");
+    await el.type(String(value), { delay: 20 });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 module.exports = async function contactFlow(page, ctx) {
-  const { website, ...data } = ctx;
+  const {
+    website,
+    groqApiKey,
+    groqModel = "llama-3.3-70b-versatile",
+    ...data
+  } = ctx;
 
-  await page.goto(website, { waitUntil: "networkidle2", timeout: 30000 });
-  await new Promise((r) => setTimeout(r, 1500));
+  if (!website) {
+    return {
+      formStatus: "INVALID_INPUT",
+      reason: "website is required",
+    };
+  }
 
-  // ─────────────────────────────
-  // FIND CONTACT PAGE
-  // ─────────────────────────────
+  await page.goto(website, {
+    waitUntil: "networkidle2",
+    timeout: 30000,
+  });
+  await sleep(1500);
+
   const contactLink = await page.evaluate(() => {
-    return Array.from(document.querySelectorAll("a")).find((a) =>
-      (a.href + a.innerText).toLowerCase().includes("contact"),
-    )?.href;
+    const anchors = Array.from(document.querySelectorAll("a"));
+    const match = anchors.find((a) =>
+      `${a.href} ${a.innerText}`.toLowerCase().includes("contact"),
+    );
+    return match?.href || null;
   });
 
   if (contactLink) {
-    await page.goto(contactLink, { waitUntil: "networkidle2" });
-    await new Promise((r) => setTimeout(r, 1500));
+    await page.goto(contactLink, {
+      waitUntil: "networkidle2",
+      timeout: 30000,
+    });
+    await sleep(1500);
   }
 
   const contactPageUrl = page.url();
+  const fields = await extractFields(page);
 
-  // ─────────────────────────────
-  // GET ALL FORM ELEMENTS
-  // ─────────────────────────────
-  const elements = await page.$$("input:not([type=hidden]), textarea, select");
-
-  if (!elements.length) {
-    return { formStatus: "NO_FORM", contactPageUrl };
+  if (!fields.length) {
+    return {
+      formStatus: "NO_FORM",
+      contactPageUrl,
+    };
   }
 
-  // ─────────────────────────────
-  // SMART FIELD MATCHING ENGINE 🔥
-  // ─────────────────────────────
-  for (const el of elements) {
-    try {
-      const meta = await el.evaluate((e) => {
-        const label = e.id
-          ? document.querySelector(`label[for="${e.id}"]`)?.innerText || ""
-          : "";
+  const fillMap = {};
+  const unresolvedFields = [];
 
-        return {
-          tag: e.tagName.toLowerCase(),
-          type: (e.type || "").toLowerCase(),
-          name: (e.name || "").toLowerCase(),
-          placeholder: (e.placeholder || "").toLowerCase(),
-          label: label.toLowerCase(),
-          required: e.required || e.getAttribute("aria-required") === "true",
-          options:
-            e.tagName === "SELECT"
-              ? Array.from(e.options).map((o) => o.value)
-              : [],
-        };
+  for (const field of fields) {
+    const heuristicValue = buildHeuristicValue(field, data);
+    if (heuristicValue !== null && heuristicValue !== undefined) {
+      fillMap[field.key] = heuristicValue;
+    } else {
+      unresolvedFields.push({
+        key: field.key,
+        tag: field.tag,
+        type: field.type,
+        name: field.name,
+        id: field.id,
+        placeholder: field.placeholder,
+        label: field.label,
+        ariaLabel: field.ariaLabel,
+        required: field.required,
+        isHidden: field.isHidden,
+        isHoneypot: field.isHoneypot,
+        existingValue: field.existingValue,
+        options: field.options || [],
       });
-
-      const text = `${meta.name} ${meta.placeholder} ${meta.label}`;
-
-      let valueToFill = null;
-
-      // 🔥 Dynamic matching from ALL data
-      for (const key in data) {
-        if (!data[key]) continue;
-
-        const keyLower = key.toLowerCase();
-
-        if (text.includes(keyLower)) {
-          valueToFill = data[key];
-          break;
-        }
-      }
-
-      // 🔥 Fallback intelligent mapping
-      if (!valueToFill) {
-        if (text.includes("email")) valueToFill = data.senderEmail;
-        else if (text.includes("name")) valueToFill = data.senderName;
-        else if (text.includes("phone") || text.includes("tel"))
-          valueToFill = data.senderPhone;
-        else if (text.includes("message") || meta.tag === "textarea")
-          valueToFill = data.message;
-      }
-
-      // 🔥 Fill input/textarea
-      if (valueToFill && meta.tag !== "select") {
-        await el.click({ clickCount: 3 });
-        await el.type(String(valueToFill), { delay: 20 });
-      }
-
-      // 🔥 Handle SELECT
-      else if (meta.tag === "select" && meta.options.length) {
-        await page.select(
-          await el.evaluate((e) => e.name),
-          meta.options.find((o) => o) || meta.options[0],
-        );
-      }
-
-      // 🔥 Required fallback
-      else if (meta.required) {
-        await el.click({ clickCount: 3 });
-        await el.type("Test", { delay: 20 });
-      }
-    } catch (err) {
-      console.log("⚠️ Skipped field");
     }
   }
 
-  await new Promise((r) => setTimeout(r, 800));
+  let aiUsed = false;
+  let aiMap = {};
 
-  // ─────────────────────────────
-  // SUBMIT FORM
-  // ─────────────────────────────
+  if (unresolvedFields.length && groqApiKey) {
+    try {
+      aiMap = await getAIFieldMapping({
+        fields: unresolvedFields,
+        senderDetails: data,
+        apiKey: groqApiKey,
+        model: groqModel,
+      });
+      aiUsed = true;
+    } catch (error) {
+      aiMap = {};
+    }
+  }
+
+  for (const field of fields) {
+    if (fillMap[field.key] !== undefined) continue;
+    const proposed = aiMap[field.key];
+    const validated = validateAIValue(field, proposed);
+
+    if (validated !== null && validated !== undefined) {
+      fillMap[field.key] = validated;
+    } else if (field.required && !field.isHidden && !field.isHoneypot) {
+      if (field.tag === "select") {
+        const validOptions = (field.options || []).filter(
+          (o) => String(o.value || "").trim() !== "",
+        );
+        if (validOptions[0]) fillMap[field.key] = validOptions[0].value;
+      } else if (field.type === "checkbox") {
+        fillMap[field.key] = true;
+      } else if (field.type === "radio") {
+        if (field.options?.[0]) fillMap[field.key] = field.options[0].value;
+      } else if (field.type === "email") {
+        fillMap[field.key] = data.senderEmail || "test@example.com";
+      } else if (field.type === "tel") {
+        fillMap[field.key] = data.senderPhone || "9999999999";
+      } else {
+        fillMap[field.key] = "Test";
+      }
+    }
+  }
+
+  const seenRadioGroups = new Set();
+
+  for (const field of fields) {
+    if (field.type === "radio") {
+      const groupKey = field.name || field.key;
+      if (seenRadioGroups.has(groupKey)) continue;
+      seenRadioGroups.add(groupKey);
+    }
+
+    await applyFieldValue(page, field, fillMap[field.key]);
+  }
+
+  await sleep(800);
+
   const btn = await page.$('button[type="submit"], input[type="submit"]');
 
   if (btn) {
     await btn.click();
   } else {
     await page.evaluate(() => {
-      document.querySelector("form")?.submit();
+      const form = document.querySelector("form");
+      if (form) {
+        const event = new Event("submit", { bubbles: true, cancelable: true });
+        const notCancelled = form.dispatchEvent(event);
+        if (notCancelled) form.submit();
+      }
     });
   }
 
-  await new Promise((r) => setTimeout(r, 3000));
+  await sleep(3000);
 
-  // 🔥 MULTI-LAYER SUCCESS DETECTION
   const result = await page.evaluate(() => {
-    const text = document.body.innerText.toLowerCase();
+    const text = (document.body.innerText || "").toLowerCase();
 
     const successText =
       text.includes("thank you") ||
       text.includes("successfully") ||
       text.includes("message sent") ||
-      text.includes("we received");
+      text.includes("we received") ||
+      text.includes("thanks for contacting") ||
+      text.includes("your message has been sent");
 
-    // Check if form disappeared
+    const errorText =
+      text.includes("error") ||
+      text.includes("required field") ||
+      text.includes("invalid email") ||
+      text.includes("please fill") ||
+      text.includes("captcha");
+
     const formExists = !!document.querySelector("form");
-
-    // Check success alert / popup
     const alertExists =
       document.querySelector(
-        ".success, .alert-success, .wpcf7-mail-sent-ok",
+        ".success, .alert-success, .wpcf7-mail-sent-ok, .message-success, .form-success",
       ) !== null;
 
     return {
       successText,
+      errorText,
       formExists,
       alertExists,
+      pageTextSample: text.slice(0, 1000),
     };
   });
 
-  // 🔥 FINAL DECISION
   const isSuccess =
-    result.successText || result.alertExists || !result.formExists;
+    (result.successText || result.alertExists || !result.formExists) &&
+    !result.errorText;
 
   return {
     formStatus: isSuccess ? "SUCCESS" : "SUBMIT_FAILED",
     debug: result,
+    aiUsed,
+    totalFields: fields.length,
+    unresolvedFieldCount: unresolvedFields.length,
     contactPageUrl,
     finalUrl: page.url(),
   };
