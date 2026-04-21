@@ -494,7 +494,8 @@ Rules:
     },
   );
 
-  const content = response?.data?.choices?.[0]?.message?.content?.trim() || "{}";
+  const content =
+    response?.data?.choices?.[0]?.message?.content?.trim() || "{}";
   return safeJsonParse(content, {});
 }
 
@@ -533,7 +534,11 @@ function buildHeuristicValue(field, data) {
       if (idx >= 0) return options[idx].value;
     }
 
-    if (text.includes("department") || text.includes("reason") || text.includes("inquiry")) {
+    if (
+      text.includes("department") ||
+      text.includes("reason") ||
+      text.includes("inquiry")
+    ) {
       const preferred = ["sales", "support", "general", "enquiry", "inquiry"];
       for (const p of preferred) {
         const idx =
@@ -545,13 +550,20 @@ function buildHeuristicValue(field, data) {
     }
 
     const validOptions = options.filter(
-      (o) => String(o.value || "").trim() !== "" && !/select|choose|please/i.test(String(o.text || "")),
+      (o) =>
+        String(o.value || "").trim() !== "" &&
+        !/select|choose|please/i.test(String(o.text || "")),
     );
     return validOptions[0]?.value ?? options[0]?.value ?? null;
   }
 
   if (field.type === "checkbox") {
-    if (text.includes("terms") || text.includes("agree") || text.includes("consent") || text.includes("privacy")) {
+    if (
+      text.includes("terms") ||
+      text.includes("agree") ||
+      text.includes("consent") ||
+      text.includes("privacy")
+    ) {
       return true;
     }
     return field.required ? true : null;
@@ -580,7 +592,11 @@ function buildHeuristicValue(field, data) {
     if (text.includes(normalizeText(key))) return val;
   }
 
-  if (text.includes("full name") || text.includes("your name") || text.includes("name")) {
+  if (
+    text.includes("full name") ||
+    text.includes("your name") ||
+    text.includes("name")
+  ) {
     return data.senderName || null;
   }
 
@@ -588,11 +604,21 @@ function buildHeuristicValue(field, data) {
     return data.senderEmail || null;
   }
 
-  if (text.includes("phone") || text.includes("tel") || text.includes("mobile") || text.includes("whatsapp")) {
+  if (
+    text.includes("phone") ||
+    text.includes("tel") ||
+    text.includes("mobile") ||
+    text.includes("whatsapp")
+  ) {
     return data.senderPhone || null;
   }
 
-  if (text.includes("company") || text.includes("organisation") || text.includes("organization") || text.includes("business")) {
+  if (
+    text.includes("company") ||
+    text.includes("organisation") ||
+    text.includes("organization") ||
+    text.includes("business")
+  ) {
     return data.businessName || null;
   }
 
@@ -639,7 +665,8 @@ function validateAIValue(field, value) {
   if (field.type === "checkbox") {
     if (typeof value === "boolean") return value;
     if (["true", "1", "yes", "on"].includes(normalizeText(value))) return true;
-    if (["false", "0", "no", "off"].includes(normalizeText(value))) return false;
+    if (["false", "0", "no", "off"].includes(normalizeText(value)))
+      return false;
     return null;
   }
 
@@ -723,7 +750,7 @@ async function applyFieldValue(context, field, value) {
             const base = document.querySelector(selector);
             if (base && base.form) {
               target = base.form.querySelector(
-                 `input[type="radio"][value="${CSS.escape(String(value))}"]`,
+                `input[type="radio"][value="${CSS.escape(String(value))}"]`,
               );
             }
           }
@@ -738,6 +765,16 @@ async function applyFieldValue(context, field, value) {
     await context.page().keyboard.press("Control+A");
     await context.page().keyboard.press("Backspace");
     await context.page().keyboard.type(String(value), { delay: 10 });
+
+    await context.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return;
+
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(new Event("blur", { bubbles: true }));
+    }, field.selector);
+
     return true;
   } catch (_) {
     return false;
@@ -783,7 +820,7 @@ async function extractFields(context) {
     };
 
     const nodes = Array.from(
-      document.querySelectorAll("input, textarea, select")
+      document.querySelectorAll("input, textarea, select"),
     );
 
     return nodes.map((e, index) => {
@@ -803,11 +840,14 @@ async function extractFields(context) {
       const hiddenByUi = !visible(e);
       const isHidden = hiddenByType || hiddenByUi;
 
-      const haystack = `${name} ${id} ${placeholder} ${label} ${ariaLabel}`.toLowerCase();
+      const haystack =
+        `${name} ${id} ${placeholder} ${label} ${ariaLabel}`.toLowerCase();
 
       const isHoneypot =
         !required &&
-        /website|url|homepage|fax|nickname|middle.?name|leave.?blank|do.?not.?fill/i.test(haystack);
+        /website|url|homepage|fax|nickname|middle.?name|leave.?blank|do.?not.?fill/i.test(
+          haystack,
+        );
 
       let options = [];
       if (tag === "select") {
@@ -820,7 +860,11 @@ async function extractFields(context) {
 
       if (type === "radio") {
         const radioGroup = name
-          ? Array.from(document.querySelectorAll(`input[type="radio"][name="${CSS.escape(name)}"]`))
+          ? Array.from(
+              document.querySelectorAll(
+                `input[type="radio"][name="${CSS.escape(name)}"]`,
+              ),
+            )
           : [e];
         options = radioGroup.map((r) => ({
           text: getLabel(r) || r.value || "",
@@ -887,11 +931,24 @@ module.exports = async function contactFlow(page, ctx) {
       });
       await sleep(1500);
     } catch (e) {
-      console.log("Navigation to contact link failed, staying on current page.");
+      console.log(
+        "Navigation to contact link failed, staying on current page.",
+      );
     }
   }
 
   const contactPageUrl = page.url();
+
+  const captchaFound = await captchaDetection(page);
+
+  if (captchaFound) {
+    return {
+      formStatus: "SKIPPED_CAPTCHA",
+      contactPageUrl: page.url(),
+      reason: "Captcha detected - skipping form",
+    };
+  }
+
   let fields = await extractFields(page);
   let activeContext = page;
 
@@ -991,6 +1048,26 @@ module.exports = async function contactFlow(page, ctx) {
     }
   }
 
+  for (const field of fields) {
+    if (
+      fillMap[field.key] === undefined &&
+      !field.isHidden &&
+      !field.isHoneypot
+    ) {
+      if (field.type === "email")
+        fillMap[field.key] = data.senderEmail || "test@test.com";
+      else if (field.type === "tel")
+        fillMap[field.key] = data.senderPhone || "9999999999";
+      else if (field.tag === "textarea")
+        fillMap[field.key] = data.message || "Hello";
+      else if (field.tag === "select" && field.options?.length) {
+        fillMap[field.key] = field.options[0].value;
+      } else {
+        fillMap[field.key] = "Test";
+      }
+    }
+  }
+
   const seenRadioGroups = new Set();
 
   for (const field of fields) {
@@ -1005,23 +1082,50 @@ module.exports = async function contactFlow(page, ctx) {
 
   await sleep(800);
 
-  const captchaFound = await captchaDetection(activeContext);
-  const btn = await activeContext.$('button[type="submit"], input[type="submit"]');
+  let requestSuccess = false;
+
+  page.on("response", (res) => {
+    if (
+      res.request().method() === "POST" &&
+      res.status() >= 200 &&
+      res.status() < 300
+    ) {
+      requestSuccess = true;
+    }
+  });
+
+  let submitted = false;
+
+  const btn = await activeContext.$(
+    'button[type="submit"], input[type="submit"]',
+  );
 
   if (btn) {
-    await smartClick(activeContext, 'button[type="submit"], input[type="submit"]');
-  } else {
+    submitted = await smartClick(
+      activeContext,
+      'button[type="submit"], input[type="submit"]',
+    );
+  }
+
+  if (!submitted) {
     await activeContext.evaluate(() => {
       const form = document.querySelector("form");
       if (form) {
-        const event = new Event("submit", { bubbles: true, cancelable: true });
-        const notCancelled = form.dispatchEvent(event);
-        if (notCancelled) form.submit();
+        form.requestSubmit ? form.requestSubmit() : form.submit();
       }
     });
   }
 
   await sleep(3000);
+
+  if (requestSuccess) {
+    return {
+      formStatus: "SUCCESS",
+      method: "network",
+      contactPageUrl,
+      finalUrl: page.url(),
+    };
+  }
 
   // 🔥 Handle navigation-induced crashes
   let result = null;
@@ -1029,52 +1133,52 @@ module.exports = async function contactFlow(page, ctx) {
     result = await activeContext.evaluate(() => {
       const text = (document.body.innerText || "").toLowerCase();
 
-    const successText =
-      text.includes("thank you") ||
-      text.includes("successfully") ||
-      text.includes("message sent") ||
-      text.includes("we received") ||
-      text.includes("thanks for contacting") ||
-      text.includes("your message has been sent") ||
-      text.includes("appreciate your interest") ||
-      text.includes("look forward to connecting") ||
-      text.includes("we will get back to you") ||
-      text.includes("submission successful") ||
-      text.includes("message was sent") ||
-      text.includes("sent successfully") ||
-      text.includes("form submitted") ||
-      text.includes("thanks for getting in touch");
+      const successText =
+        text.includes("thank you") ||
+        text.includes("successfully") ||
+        text.includes("message sent") ||
+        text.includes("we received") ||
+        text.includes("thanks for contacting") ||
+        text.includes("your message has been sent") ||
+        text.includes("appreciate your interest") ||
+        text.includes("look forward to connecting") ||
+        text.includes("we will get back to you") ||
+        text.includes("submission successful") ||
+        text.includes("message was sent") ||
+        text.includes("sent successfully") ||
+        text.includes("form submitted") ||
+        text.includes("thanks for getting in touch");
 
-    const errorTextFound =
-      text.includes("error") ||
-      text.includes("required field") ||
-      text.includes("invalid email") ||
-      text.includes("please fill") ||
-      text.includes("captcha");
+      const errorTextFound =
+        text.includes("error") ||
+        text.includes("required field") ||
+        text.includes("invalid email") ||
+        text.includes("please fill") ||
+        text.includes("captcha");
 
-    const errorMessages = Array.from(
-      document.querySelectorAll(
-        ".error, .alert-danger, .wpcf7-not-valid-tip, .message-error, .form-error, .invalid-feedback, [aria-invalid='true']",
-      ),
-    )
-      .map((el) => el.innerText.trim())
-      .filter((t) => t.length > 5 && t.length < 500);
+      const errorMessages = Array.from(
+        document.querySelectorAll(
+          ".error, .alert-danger, .wpcf7-not-valid-tip, .message-error, .form-error, .invalid-feedback, [aria-invalid='true']",
+        ),
+      )
+        .map((el) => el.innerText.trim())
+        .filter((t) => t.length > 5 && t.length < 500);
 
-    const formExists = !!document.querySelector("form");
-    const alertExists =
-      document.querySelector(
-        ".success, .alert-success, .wpcf7-mail-sent-ok, .message-success, .form-success",
-      ) !== null;
+      const formExists = !!document.querySelector("form");
+      const alertExists =
+        document.querySelector(
+          ".success, .alert-success, .wpcf7-mail-sent-ok, .message-success, .form-success",
+        ) !== null;
 
-    return {
-      successText,
-      errorText: errorTextFound || errorMessages.length > 0,
-      errorMessages,
-      formExists,
-      alertExists,
-      pageTextSample: text.slice(0, 1000),
-    };
-  });
+      return {
+        successText,
+        errorText: errorTextFound || errorMessages.length > 0,
+        errorMessages,
+        formExists,
+        alertExists,
+        pageTextSample: text.slice(0, 1000),
+      };
+    });
   } catch (err) {
     // If navigation happened, try one last time on the new context
     await sleep(2000);
@@ -1108,12 +1212,19 @@ module.exports = async function contactFlow(page, ctx) {
   }
 
   const isSuccess =
-    result && (result.successText || result.alertExists || !result.formExists) &&
-    !result.errorText;
+    requestSuccess ||
+    (result &&
+      (result.successText || result.alertExists || !result.formExists) &&
+      !result.errorText);
 
   return {
     formStatus: isSuccess ? "SUCCESS" : "SUBMIT_FAILED",
-    error: !isSuccess ? result.errorMessages.join(" | ") || (captchaFound ? "Captcha detected - Manual intervention required" : "Submission failed without specific error message") : null,
+    error: !isSuccess
+      ? result?.errorMessages?.join(" | ") ||
+        (captchaFound
+          ? "Captcha detected - Manual intervention required"
+          : "Submission failed")
+      : null,
     debug: result,
     captchaFound,
     aiUsed,
