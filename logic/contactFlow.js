@@ -761,19 +761,20 @@ async function applyFieldValue(context, field, value) {
       return true;
     }
 
-    await smartClick(context, field.selector);
-    await context.page().keyboard.press("Control+A");
-    await context.page().keyboard.press("Backspace");
-    await context.page().keyboard.type(String(value), { delay: 10 });
+    await context.evaluate(
+      (sel, val) => {
+        const el = document.querySelector(sel);
+        if (!el) return;
 
-    await context.evaluate((sel) => {
-      const el = document.querySelector(sel);
-      if (!el) return;
+        el.focus();
+        el.value = val;
 
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-      el.dispatchEvent(new Event("blur", { bubbles: true }));
-    }, field.selector);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      },
+      field.selector,
+      String(value),
+    );
 
     return true;
   } catch (_) {
@@ -1088,14 +1089,21 @@ module.exports = async function contactFlow(page, ctx) {
       } else if (field.type === "radio") {
         if (field.options?.[0]) fillMap[field.key] = field.options[0].value;
       } else if (field.type === "email") {
-        fillMap[field.key] = data.senderEmail || "test@example.com";
+        fillMap[field.key] = data.senderEmail || "johnsmith@gmail.com";
       } else if (field.type === "tel") {
-        fillMap[field.key] = data.senderPhone || "9999999999";
+        fillMap[field.key] = data.senderPhone || "9876543210";
       } else {
-        fillMap[field.key] = "Test";
+        fillMap[field.key] = "John Smith";
       }
     }
   }
+
+  const realisticData = {
+    name: "John Smith",
+    email: "johnsmith@gmail.com",
+    phone: "9876543210",
+    company: "JS Solutions",
+  };
 
   for (const field of fields) {
     if (
@@ -1104,15 +1112,19 @@ module.exports = async function contactFlow(page, ctx) {
       !field.isHoneypot
     ) {
       if (field.type === "email")
-        fillMap[field.key] = data.senderEmail || "test@test.com";
+        fillMap[field.key] = data.senderEmail || realisticData.email;
       else if (field.type === "tel")
-        fillMap[field.key] = data.senderPhone || "9999999999";
+        fillMap[field.key] = data.senderPhone || realisticData.phone;
       else if (field.tag === "textarea")
-        fillMap[field.key] = data.message || "Hello";
+        fillMap[field.key] =
+          data.message ||
+          "Hello, I am interested in your services and would like more information. Please reach out.";
       else if (field.tag === "select" && field.options?.length) {
         fillMap[field.key] = field.options[0].value;
       } else {
-        fillMap[field.key] = "Test";
+        fillMap[field.key] = field.key.toLowerCase().includes("company")
+          ? realisticData.company
+          : realisticData.name;
       }
     }
   }
@@ -1147,6 +1159,26 @@ module.exports = async function contactFlow(page, ctx) {
     }
   });
 
+  const nextBtn = await activeContext.$('button, input[type="button"]');
+
+  if (nextBtn) {
+    const text = await activeContext.evaluate(
+      (el) => (el.innerText || el.value || "").toLowerCase(),
+      nextBtn,
+    );
+
+    if (text.includes("next")) {
+      await nextBtn.click();
+      await sleep(2000);
+    }
+  }
+
+  await activeContext.evaluate(() => {
+    document
+      .querySelectorAll("button[disabled], input[disabled]")
+      .forEach((btn) => (btn.disabled = false));
+  });
+
   let submitted = false;
 
   const btn = await activeContext.$(
@@ -1163,9 +1195,7 @@ module.exports = async function contactFlow(page, ctx) {
   if (!submitted) {
     await activeContext.evaluate(() => {
       const form = document.querySelector("form");
-      if (form) {
-        form.requestSubmit ? form.requestSubmit() : form.submit();
-      }
+      if (form) form.submit();
     });
   }
 
@@ -1280,6 +1310,10 @@ module.exports = async function contactFlow(page, ctx) {
 
     await sleep(2000);
     isSuccess = requestSuccess || isSuccess;
+  }
+
+  if (!isSuccess) {
+    await page.screenshot({ path: `fail-${Date.now()}.png`, fullPage: true });
   }
 
   if (page.url().includes("thank") || page.url().includes("success")) {
