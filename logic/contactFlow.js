@@ -782,7 +782,12 @@ async function applyFieldValue(context, field, value) {
 }
 
 async function extractFields(context) {
-  return await context.evaluate(() => {
+  return await context.evaluate((root) => {
+    const target =
+      typeof root !== "undefined" && root && root.nodeType === 1
+        ? root
+        : document;
+
     const visible = (el) => {
       const style = window.getComputedStyle(el);
       return (
@@ -820,7 +825,7 @@ async function extractFields(context) {
     };
 
     const nodes = Array.from(
-      document.querySelectorAll("input, textarea, select"),
+      target.querySelectorAll("input, textarea, select"),
     );
 
     return nodes.map((e, index) => {
@@ -913,7 +918,9 @@ module.exports = async function contactFlow(page, ctx) {
     waitUntil: "networkidle2",
     timeout: 30000,
   });
-  await sleep(1500);
+  try {
+    await page.waitForSelector("form, input, textarea", { timeout: 7000 });
+  } catch (_) {}
 
   const contactLink = await page.evaluate(() => {
     const anchors = Array.from(document.querySelectorAll("a"));
@@ -929,7 +936,9 @@ module.exports = async function contactFlow(page, ctx) {
         waitUntil: "networkidle2",
         timeout: 15000,
       });
-      await sleep(1500);
+      try {
+        await page.waitForSelector("form, input, textarea", { timeout: 7000 });
+      } catch (_) {}
     } catch (e) {
       console.log(
         "Navigation to contact link failed, staying on current page.",
@@ -949,16 +958,56 @@ module.exports = async function contactFlow(page, ctx) {
     };
   }
 
-  let fields = await extractFields(page);
+  await page.evaluate(() => {
+    window.scrollTo(0, document.body.scrollHeight);
+  });
+  await sleep(1500);
+  await page.evaluate(() => {
+    window.scrollTo(0, 0);
+  });
+
+  await page.evaluate(() => {
+    const getAllShadowRoots = (node) => {
+      let results = [];
+      if (node.shadowRoot) {
+        results.push(node.shadowRoot);
+        node.shadowRoot.querySelectorAll("*").forEach((el) => {
+          results = results.concat(getAllShadowRoots(el));
+        });
+      }
+      return results;
+    };
+
+    window.__shadowRoots = getAllShadowRoots(document.body);
+  });
+
+  const forms = await page.$$("form");
+  let bestForm = null;
+  let bestScore = 0;
+
+  for (const form of forms) {
+    const score = await form.evaluate((f) => {
+      const text = f.innerText.toLowerCase();
+      let s = 0;
+      if (text.includes("message")) s += 10;
+      if (text.includes("email")) s += 8;
+      if (text.includes("name")) s += 5;
+      return s;
+    });
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestForm = form;
+    }
+  }
+
+  let fields = bestForm
+    ? await extractFields(bestForm)
+    : await extractFields(page);
   let activeContext = page;
 
   if (!fields.length) {
     console.log("No form on main page, scanning iframes...");
-    // Scroll to bottom to trigger lazy-loaded iframes
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await sleep(2000);
-    await page.evaluate(() => window.scrollTo(0, 0));
-
     const frames = page.frames();
     for (const frame of frames) {
       const frameFields = await extractFields(frame);
@@ -1085,12 +1134,16 @@ module.exports = async function contactFlow(page, ctx) {
   let requestSuccess = false;
 
   page.on("response", (res) => {
+    const url = res.url().toLowerCase();
     if (
       res.request().method() === "POST" &&
-      res.status() >= 200 &&
-      res.status() < 300
+      (url.includes("contact") ||
+        url.includes("form") ||
+        url.includes("submit"))
     ) {
-      requestSuccess = true;
+      if (res.status() >= 200 && res.status() < 400) {
+        requestSuccess = true;
+      }
     }
   });
 
@@ -1211,11 +1264,31 @@ module.exports = async function contactFlow(page, ctx) {
     }
   }
 
-  const isSuccess =
+  let isSuccess =
     requestSuccess ||
     (result &&
       (result.successText || result.alertExists || !result.formExists) &&
       !result.errorText);
+
+  if (!isSuccess) {
+    await sleep(2000);
+
+    const retryBtn = await activeContext.$(
+      'button[type="submit"], input[type="submit"]',
+    );
+    if (retryBtn) await retryBtn.click();
+
+    await sleep(2000);
+    isSuccess = requestSuccess || isSuccess;
+  }
+
+  if (page.url().includes("thank") || page.url().includes("success")) {
+    return {
+      formStatus: "SUCCESS_REDIRECT",
+      contactPageUrl,
+      finalUrl: page.url(),
+    };
+  }
 
   return {
     formStatus: isSuccess ? "SUCCESS" : "SUBMIT_FAILED",
